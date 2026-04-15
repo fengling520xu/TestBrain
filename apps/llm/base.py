@@ -81,7 +81,7 @@ class LLMServiceFactory:
     """大模型服务工厂"""
     
     @staticmethod
-    def create(provider: str, **config) -> BaseChatModel:
+    def create(provider: str, **config) -> Any:
         """创建LLM服务实例"""
         logger = get_logger(__class__.__name__)
         logger.info(f"创建LLM服务: provider={provider}")
@@ -96,8 +96,8 @@ class LLMServiceFactory:
             logger.warning(f"不支持的LLM提供商: {provider}，使用默认提供商: {default_provider}")
             provider = default_provider
         
-        # 获取提供商配置
-        provider_config = providers.get(provider, {})
+        # 获取提供商配置（来自settings.py）
+        provider_config = providers.get(provider, {}).copy()
         
         # 获取API密钥
         api_key = config.get('api_key') or os.getenv(f"{provider.upper()}_API_KEY")
@@ -107,24 +107,24 @@ class LLMServiceFactory:
         # 创建回调处理器
         callbacks = [LoggingCallbackHandler()]
         
-        # 合并配置
-        merged_config = {
-            **provider_config,
-            **config,
+        # 合并配置：settings.py 配置为基础，运行时配置覆盖
+        final_config = {
+            **provider_config,  # 来自settings.py的默认配置
+            **config,           # 运行时传入的配置（优先级更高）
             'callbacks': callbacks,
-            'verbose': True  # 启用详细日志
+            'verbose': True
         }
+        
+        # 打印最终配置（调试用）
+        logger.info(f"Final config for {provider}: {final_config}")
         
         # 根据提供商创建相应的服务实例
         if provider.lower() == "deepseek":
             from .deepseek import DeepSeekChatModel
-            return DeepSeekChatModel(**merged_config)
+            return DeepSeekChatModel(**final_config)
         elif provider.lower() == "qwen":
             from .qwen import QwenChatModel
-            return QwenChatModel(**merged_config)
-        elif provider.lower() == "openai":
-            from langchain_community.chat_models import ChatOpenAI
-            return ChatOpenAI(**merged_config)
+            return QwenChatModel(**final_config)
         else:
             logger.error(f"未实现的LLM提供商: {provider}")
-            raise NotImplementedError(f"LLM provider {provider} is not implemented") 
+            raise NotImplementedError(f"LLM provider {provider} is not implemented")

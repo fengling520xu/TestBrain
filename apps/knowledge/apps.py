@@ -8,10 +8,10 @@ class KnowledgeConfig(AppConfig):
     vector_store = None
 
     def ready(self):
-        from .embedding import BGEM3Embedder
+        from .embedding import create_embedder
         from .vector_store import MilvusVectorStore
 
         if KnowledgeConfig.embedder is None:
-            KnowledgeConfig.embedder = BGEM3Embedder()
+            KnowledgeConfig.embedder = create_embedder()
         if KnowledgeConfig.vector_store is None:
             KnowledgeConfig.vector_store = MilvusVectorStore()

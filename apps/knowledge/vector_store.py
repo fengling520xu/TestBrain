@@ -2,8 +2,7 @@ from pymilvus import connections, Collection, utility, DataType
 from pymilvus import CollectionSchema, FieldSchema
 # import numpy as np
 from typing import List, Dict, Any, Optional
-# import os
-# from django.conf import settings
+from django.conf import settings
 from apps.utils.logger_manager import get_logger
 
 logger = get_logger(__name__)
@@ -12,12 +11,15 @@ class MilvusVectorStore:
     """Milvus向量数据库服务"""
     
     def __init__(self, 
-                host: str = "localhost", 
-                port: str = "19530",
-                collection_name: str = "vv_knowledge_collection"):
-        self.host = host
-        self.port = port
-        self.collection_name = collection_name
+                host: Optional[str] = None, 
+                port: Optional[str] = None,
+                db_name: Optional[str] = None,
+                collection_name: Optional[str] = None):
+        config = getattr(settings, "VECTOR_DB_CONFIG", {}) or {}
+        self.host = host or config.get("host", "localhost")
+        self.port = port or config.get("port", "19530")
+        self.db_name = db_name or config.get("db_name", "default")
+        self.collection_name = collection_name or config.get("collection_name", "vv_knowledge_collection")
         # 原来的逻辑
         self._connect()
         self._ensure_collection()
@@ -34,7 +36,8 @@ class MilvusVectorStore:
         connections.connect(
             alias="default", 
             host=self.host,
-            port=self.port
+            port=self.port,
+            db_name=self.db_name
         )
         
     def _ensure_collection(self):
@@ -115,12 +118,33 @@ class MilvusVectorStore:
         logger.info("进入到add_data方法")
         collection = Collection(self.collection_name)
 
-        try:
-            collection.insert(data)
-        except Exception as e:
-            raise
-                
+        # 增加截断逻辑：遍历数据，确保 content 不超过 4096
+        safe_data = []
+        for item in data:
+            content = item.get("content", "")
+            if len(content) > 4096:
+                logger.warning(f"检测到内容长度 {len(content)} 超过 4096，已执行强制截断。")
+                item["content"] = content[:4092] + "..."
+            safe_data.append(item)
+        
+        # 插入处理后的 safe_data
+        collection.insert(safe_data)
         collection.flush()
+    
+    def delete_by_source(self, source_path: str):
+        """根据文件路径删除文档的所有记录"""
+        logger.info(f"开始删除文件 {source_path} 的向量记录")
+        collection = Collection(self.collection_name)
+        
+        try:
+            # 构建删除表达式：根据source字段删除
+            expr = f'source == "{source_path}"'
+            collection.delete(expr)
+            collection.flush()
+            logger.info(f"成功删除文件 {source_path} 的向量记录")
+        except Exception as e:
+            logger.error(f"删除文件 {source_path} 的向量记录失败: {str(e)}")
+            raise
         
     def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
         """搜索最相似的文档"""

@@ -39,7 +39,7 @@ DEFAULT_LLM_CONFIG = PROVIDERS.get(DEFAULT_PROVIDER, {})
 # 创建LLM服务实例
 llm_service = LLMServiceFactory.create(
     provider=DEFAULT_PROVIDER,
-    **DEFAULT_LLM_CONFIG
+    # **DEFAULT_LLM_CONFIG
 )
 
 knowledge_service = get_knowledgeService_instance()
@@ -196,14 +196,38 @@ def upload_single_file(request):
     elif request.method == 'POST':
         if 'single_file' in request.FILES:  # 修改这里匹配前端的 name 属性
             uploaded_file = request.FILES['single_file']  # 修改这里匹配前端的 name 属性
-            file_path = os.path.join(settings.MEDIA_ROOT, uploaded_file.name)
             
-            # 先检查文件是否存在
+            # 统一使用 MEDIA_ROOT 配置
+            upload_dir = settings.MEDIA_ROOT
+            file_path = os.path.join(upload_dir, uploaded_file.name)
+            
+            # 检查文件是否存在，如果存在则覆盖
+            is_overwrite = False
             if os.path.exists(file_path):
-                return JsonResponse({
-                    'success': False,
-                    'error': '文件已存在'
-                })
+                logger.info(f"检测到同名文件存在，将进行覆盖: {file_path}")
+                is_overwrite = True
+                
+                # 1. 删除向量数据库中的旧记录
+                try:
+                    knowledge_service.vector_store.delete_by_source(file_path)
+                    logger.info("成功删除旧的向量记录")
+                except Exception as e:
+                    logger.error(f"删除旧向量记录失败: {str(e)}")
+                    return JsonResponse({
+                        'success': False,
+                        'error': f'覆盖文件时删除旧数据失败: {str(e)}'
+                    })
+                
+                # 2. 删除旧文件
+                try:
+                    os.remove(file_path)
+                    logger.info("成功删除旧文件")
+                except Exception as e:
+                    logger.error(f"删除旧文件失败: {str(e)}")
+                    return JsonResponse({
+                        'success': False,
+                        'error': f'删除旧文件失败: {str(e)}'
+                    })
                 
             try:
                 # 1. 接收文件
@@ -244,14 +268,12 @@ def upload_single_file(request):
                 if file_type not in supported_extensions:
                     return JsonResponse({'success': False, 'error': '不支持的文件类型'})
                 
-                # 2. 保存临时文件
-                save_dir = 'uploads/'
-                os.makedirs(save_dir, exist_ok=True)
-                file_path = os.path.join(save_dir, f"{uploaded_file.name}")
+                # 2. 保存文件到统一目录
+                os.makedirs(upload_dir, exist_ok=True)
                 with open(file_path, 'wb+') as f:
                     for chunk in uploaded_file.chunks():
                         f.write(chunk)
-                logger.info(f"临时文件保存成功, 文件保存路径: {file_path}")
+                logger.info(f"文件保存成功, 文件保存路径: {file_path}")
 
                 # 3. 处理文件
                 chunks = process_singel_file(file_path)  # 获取原始数据和文本
@@ -318,7 +340,7 @@ def upload_single_file(request):
                     return JsonResponse({
                         'success': True, 
                         'count': len(text_contents),
-                        'message': f'成功导入文件到知识库'
+                        'message': f'成功{"覆盖" if is_overwrite else "导入"}文件到知识库'
                     })
                     
                 except Exception as e:
@@ -335,10 +357,10 @@ def upload_single_file(request):
                     'error': str(e)
                 })
             finally:
-                # 清理临时文件
-                if os.path.exists(file_path):
-                    pass
-                    # os.remove(file_path)
+                # 清理临时文件（注释掉，因为现在保存的是正式文件）
+                # if os.path.exists(file_path):
+                #     os.remove(file_path)
+                pass
         else:
             return JsonResponse({
                 'success': False,

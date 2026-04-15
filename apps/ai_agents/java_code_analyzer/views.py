@@ -3,6 +3,7 @@ from django.conf import settings
 from apps.llm import LLMServiceFactory
 from apps.ai_agents.java_code_analyzer.java_code_analyzer_agent import JavaCodeAnalyzerAgent
 import json
+import os
 from django.http import JsonResponse
 from apps.ai_agents.java_code_analyzer.tools import GitTools
 from pathlib import Path
@@ -23,15 +24,14 @@ from apps.llm.utils import get_agent_llm_configs
 
 logger = get_logger(__name__)
 
-# 获取LLM配置
-llm_config = getattr(settings, 'LLM_PROVIDERS', {})
-
-DEFAULT_PROVIDER, PROVIDERS = get_agent_llm_configs("java_code_analyzer")
-
 
 def java_code_analyzer(request):
     """Java源码分析页面视图"""
     if request.method == 'GET':
+        # 动态获取LLM配置用于前端下拉框
+        from apps.llm.utils import get_agent_llm_configs
+        DEFAULT_PROVIDER, PROVIDERS = get_agent_llm_configs("java_code_analyzer")
+        
         context = {
             'llm_providers': PROVIDERS,
             'llm_provider': DEFAULT_PROVIDER,
@@ -71,47 +71,59 @@ def java_code_analyzer_service_api(request):
     """Java源码分析API接口"""
     try:
         data = json.loads(request.body)
-        target_service = data.get('target_service')
+        project_id = data.get('project_id')  # 改为 project_id
         base_commit = data.get('base_commit')
         new_commit = data.get('new_commit')
-        llm_provider = data.get('llm_provider', DEFAULT_PROVIDER)
-        # model 参数将从 settings 配置中获取，无需显式传递
+        llm_provider = data.get('llm_provider')
         
-        logger.info(f"Java代码分析请求: 服务={target_service}, 基础提交={base_commit}, 新提交={new_commit}, LLM提供商={llm_provider}")
+        logger.info(f"Java代码分析请求: 项目={project_id}, 基础提交={base_commit}, 新提交={new_commit}, LLM提供商={llm_provider}")
         
         # 验证参数
-        if not target_service or not base_commit or not new_commit:
+        if not project_id or not base_commit or not new_commit:
             return JsonResponse({
                 'success': False,
-                'error': '目标服务、基础提交和新提交均为必填项'
+                'error': '项目ID、基础提交和新提交均为必填项'
             }, status=400)
         
-        # 使用工厂创建选定的LLM服务
-        llm_service = LLMServiceFactory.create(
-            provider=llm_provider,
-            **PROVIDERS.get(llm_provider, {})
-        )
+        # 使用新的项目路径映射
+        from django.conf import settings
         
-        repo_path_mapping = settings.REPO_PATH_MAPPING
+        base_dir = getattr(settings, 'JAVA_PROJECTS_BASE_DIR', None)
+        project_mapping = getattr(settings, 'PROJECT_ID_REPO_MAPPING', {})
         
-        repo_path = repo_path_mapping.get(target_service, target_service)
+        if not base_dir:
+            return JsonResponse({
+                'success': False,
+                'error': 'JAVA_PROJECTS_BASE_DIR 未配置'
+            }, status=500)
         
+        # 构建项目路径
+        repo_path = os.path.join(base_dir, project_id)
+        logger.info(f"构建出来的项目路径是: {repo_path}")
+        
+        # 检查项目是否存在
+        if not os.path.exists(repo_path):
+            return JsonResponse({
+                'success': False,
+                'error': f'项目 {project_id} 不存在。路径: {repo_path}'
+            }, status=400)
+        
+        logger.info(f"使用项目路径: {repo_path}")
+
         # 创建Java代码分析Agent实例
         analyzer_agent = JavaCodeAnalyzerAgent(
             repo_path=repo_path,
-            api_key=getattr(settings, f'{llm_provider.upper()}_API_KEY', None),
-            base_url=getattr(settings, f'{llm_provider.upper()}_BASE_URL', None),
-            java_analyzer_service_url=getattr(settings, 'JAVA_ANALYZER_SERVICE_URL', 'http://localhost:8089'),
-            max_iterations=15,
-            verbose=True
+            java_analyzer_service_url=getattr(settings, 'JAVA_ANALYZER_SERVICE_URL'),
+            max_iterations=100,
+            verbose=True,
+            llm_provider=llm_provider,
         )
         
         git_tools = GitTools(repo_path)
         output_dir = Path(settings.BASE_DIR) / "outputs"
         output_dir.mkdir(parents=True, exist_ok=True)
-        repo_identifier = Path(repo_path).name or "repo"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"{repo_identifier}_analyzer_{base_commit[:8]}_{new_commit[:8]}_{timestamp}.md"
+        output_filename = f"{project_id}_analyzer_{base_commit[:8]}_{new_commit[:8]}_{timestamp}.md"
         output_path = output_dir / output_filename
 
         original_ref = None
@@ -130,6 +142,14 @@ def java_code_analyzer_service_api(request):
             logger.info(f"已切换到: {new_commit}")
 
             result = analyzer_agent.analyze(base_commit, new_commit)
+
+            # 检查返回值类型
+            if not isinstance(result, dict):
+                logger.error(f"分析返回值类型错误: {type(result)}, 值: {result}")
+                return JsonResponse({
+                    'success': False,
+                    'error': f'分析返回值类型错误: {str(result)}'
+                }, status=500)
 
             if result.get('success'):
                 report_content = result.get('output', '')

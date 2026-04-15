@@ -6,7 +6,79 @@
 from typing import Optional, Type, List, Dict, Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
+import re
 from .tools import GitTools, AnalyzerAPITools, SourceCodeTools
+
+
+_COMMIT_HASH_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+def _sanitize_simple_str(value: Any) -> str:
+    """清洗简单字符串入参。
+
+    目标：把工具调用/LLM 输出里常见的包裹符与空白去掉，得到更“干净”的纯字符串。
+
+    处理策略：
+    - None -> 空字符串
+    - 非 str -> str(...) 转换
+    - strip() 去除首尾空白
+    - 若以 ``` 开头（常见代码块包裹），移除反引号
+    - 去除首尾的空白、换行以及引号/反引号等包裹字符
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+    value = value.strip()
+    if value.startswith("```"):
+        value = value.strip('`')
+    value = value.strip(" \t\r\n\"\'`")
+    return value
+
+
+def _parse_jsonish(value: Any) -> Any:
+    """解析“类 JSON”入参。
+
+    支持 value 为 dict/list（原样返回）或 str（尝试解析）。
+    解析顺序：
+    - 标准 json.loads
+    - json5.loads（兼容尾逗号、单引号、注释等更宽松格式）
+    若均失败，则返回清洗后的原始字符串。
+    """
+    if isinstance(value, (dict, list)):
+        return value
+    if value is None:
+        return None
+    s = _sanitize_simple_str(value)
+    if not s:
+        return None
+
+    import json
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+
+    try:
+        import json5
+        return json5.loads(s)
+    except Exception:
+        return s
+
+
+def _validate_commit_hash(value: str, field_name: str) -> str:
+    """校验并标准化 commit hash 入参。
+
+    - 先做字符串清洗（_sanitize_simple_str）
+    - 再校验格式必须为 7-40 位十六进制（短/长 hash 皆可）
+    - 失败时抛 ValueError，便于上层工具统一返回“参数验证失败”
+    """
+    v = _sanitize_simple_str(value)
+    if not v:
+        raise ValueError(f"{field_name} 不能为空")
+    if not _COMMIT_HASH_RE.match(v):
+        raise ValueError(f"{field_name} 格式非法: '{v}'。必须为 7-40 位十六进制 commit hash")
+    return v
 
 
 # ============================================
@@ -28,9 +100,39 @@ class GetCommitInfoTool(BaseTool):
     
     def _run(self, commit_hash: str) -> str:
         """执行工具"""
+        try:
+            commit_hash = _validate_commit_hash(commit_hash, "commit_hash")
+        except Exception as e:
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_commit_info",
+                "hint": str(e),
+                "received": f"commit_hash='{commit_hash}'"
+            }, ensure_ascii=False, indent=2)
+
+        # 添加参数验证：确保commit_hash不含中文
+        if self._contains_chinese(commit_hash):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_commit_info", 
+                "hint": "commit_hash参数不能包含中文字符，请检查输入",
+                "received": f"commit_hash='{commit_hash}'"
+            }, ensure_ascii=False, indent=2)
+            
         result = self.git_tools.get_commit_info(commit_hash)
         import json
         return json.dumps(result, ensure_ascii=False, indent=2)
+    
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
     
     async def _arun(self, commit_hash: str) -> str:
         """异步执行（暂不支持）"""
@@ -52,9 +154,40 @@ class GetChangedFilesTool(BaseTool):
     git_tools: GitTools = Field(default=None, exclude=True)
     
     def _run(self, base_commit: str, new_commit: str) -> str:
+        try:
+            base_commit = _validate_commit_hash(base_commit, "base_commit")
+            new_commit = _validate_commit_hash(new_commit, "new_commit")
+        except Exception as e:
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_changed_files",
+                "hint": str(e),
+                "received": f"base_commit='{base_commit}', new_commit='{new_commit}'"
+            }, ensure_ascii=False, indent=2)
+
+        # 添加参数验证：确保commit哈希不含中文
+        if self._contains_chinese(base_commit) or self._contains_chinese(new_commit):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_changed_files", 
+                "hint": "commit哈希参数不能包含中文字符，请检查输入",
+                "received": f"base_commit='{base_commit}', new_commit='{new_commit}'"
+            }, ensure_ascii=False, indent=2)
+            
         result = self.git_tools.get_changed_files(base_commit, new_commit)
         import json
         return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class GetChangedFilesDetailedTool(BaseTool):
@@ -74,6 +207,28 @@ class GetChangedFilesDetailedTool(BaseTool):
     git_tools: GitTools = Field(default=None, exclude=True)
     
     def _run(self, base_commit: str, new_commit: str) -> str:
+        try:
+            base_commit = _validate_commit_hash(base_commit, "base_commit")
+            new_commit = _validate_commit_hash(new_commit, "new_commit")
+        except Exception as e:
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_changed_files_detailed",
+                "hint": str(e),
+                "received": f"base_commit='{base_commit}', new_commit='{new_commit}'"
+            }, ensure_ascii=False, indent=2)
+
+        # 添加参数验证：确保commit哈希不含中文
+        if self._contains_chinese(base_commit) or self._contains_chinese(new_commit):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_changed_files_detailed", 
+                "hint": "commit哈希参数不能包含中文字符，请检查输入",
+                "received": f"base_commit='{base_commit}', new_commit='{new_commit}'"
+            }, ensure_ascii=False, indent=2)
+            
         import json
         result = self.git_tools.get_changed_files_detailed(base_commit, new_commit)
         
@@ -106,6 +261,15 @@ class GetChangedFilesDetailedTool(BaseTool):
             normalized_result.append(normalized)
         
         return json.dumps(normalized_result, ensure_ascii=False, indent=2)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class FileDiffInput(BaseModel):
@@ -145,8 +309,40 @@ class GetFileDiffTool(BaseTool):
     git_tools: GitTools = Field(default=None, exclude=True)
     
     def _run(self, base_commit: str, new_commit: str, file_path: str, offset: int = 0, limit: int = 300) -> str:
+        try:
+            base_commit = _validate_commit_hash(base_commit, "base_commit")
+            new_commit = _validate_commit_hash(new_commit, "new_commit")
+            file_path = _sanitize_simple_str(file_path)
+        except Exception as e:
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_file_diff",
+                "hint": str(e),
+                "received": f"base_commit='{base_commit}', new_commit='{new_commit}', file_path='{file_path}'"
+            }, ensure_ascii=False, indent=2)
+
+        # 添加参数验证：确保commit哈希和文件路径不含中文
+        if self._contains_chinese(base_commit) or self._contains_chinese(new_commit) or self._contains_chinese(file_path):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_file_diff", 
+                "hint": "commit哈希和文件路径参数不能包含中文字符，请检查输入",
+                "received": f"base_commit='{base_commit}', new_commit='{new_commit}', file_path='{file_path}'"
+            }, ensure_ascii=False, indent=2)
+            
         # 直接调用底层方法，所有分段逻辑已在底层实现
         return self.git_tools.get_file_diff(base_commit, new_commit, file_path, offset, limit)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class FileContentInput(BaseModel):
@@ -180,17 +376,48 @@ class GetFileContentByCommitTool(BaseTool):
     git_tools: GitTools = Field(default=None, exclude=True)
     
     def _run(self, commit_hash: str, file_path: str, offset: int = 0, limit: int = 500) -> str:
+        try:
+            commit_hash = _validate_commit_hash(commit_hash, "commit_hash")
+            file_path = _sanitize_simple_str(file_path)
+        except Exception as e:
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_file_content_by_commit",
+                "hint": str(e),
+                "received": f"commit_hash='{commit_hash}', file_path='{file_path}'"
+            }, ensure_ascii=False, indent=2)
+
+        # 添加参数验证：确保commit哈希和文件路径不含中文
+        if self._contains_chinese(commit_hash) or self._contains_chinese(file_path):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_file_content_by_commit", 
+                "hint": "commit哈希和文件路径参数不能包含中文字符，请检查输入",
+                "received": f"commit_hash='{commit_hash}', file_path='{file_path}'"
+            }, ensure_ascii=False, indent=2)
+            
         # 直接调用底层方法，所有分段逻辑已在底层实现
         return self.git_tools.get_file_content_by_commit(commit_hash, file_path, offset, limit)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class CommitsBetweenInput(BaseModel):
     """获取提交历史的输入"""
-    base_commit: str = Field(description="基准 commit 哈希")
-    new_commit: str = Field(description="新 commit 哈希")
+    base_commit: str = Field(description="基准commit哈希值,绝对不能有中文")
+    new_commit: str = Field(description="新commit哈希值,绝对不能有中文")
     max_count: int = Field(
         default=20, 
-        description="""最多返回的 commit 数量。建议根据时间跨度调整：
+        description="""最多返回的commit数量。建议根据时间跨度调整：
         - 小型变更（<1周）: 10-15 个
         - 中型变更（1-2周）: 20-30 个 [默认]
         - 大型变更（>1月）: 50-100 个
@@ -215,6 +442,28 @@ class GetCommitsBetweenTool(BaseTool):
     git_tools: GitTools = Field(default=None, exclude=True)
     
     def _run(self, base_commit: str, new_commit: str, max_count: int = 20) -> str:
+        try:
+            base_commit = _validate_commit_hash(base_commit, "base_commit")
+            new_commit = _validate_commit_hash(new_commit, "new_commit")
+        except Exception as e:
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_commits_between",
+                "hint": str(e),
+                "received": f"base_commit='{base_commit}', new_commit='{new_commit}'"
+            }, ensure_ascii=False, indent=2)
+
+        # 添加参数验证：确保commit哈希不含中文
+        if self._contains_chinese(base_commit) or self._contains_chinese(new_commit):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "get_commits_between", 
+                "hint": "commit哈希参数不能包含中文字符，请检查输入",
+                "received": f"base_commit='{base_commit}', new_commit='{new_commit}'"
+            }, ensure_ascii=False, indent=2)
+            
         result = self.git_tools.get_commits_between(base_commit, new_commit, max_count)
         import json
         
@@ -244,6 +493,15 @@ class GetCommitsBetweenTool(BaseTool):
         else:
             return json.dumps(result, ensure_ascii=False, indent=2)
 
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
+
 
 # ============================================
 # 源码分析 API 工具的 LangChain 封装
@@ -251,7 +509,7 @@ class GetCommitsBetweenTool(BaseTool):
 
 class IndexProjectInput(BaseModel):
     """索引项目的输入"""
-    repo_path: str = Field(description="项目根路径")
+    project_id: str = Field(description="项目ID（如 education-service），后端java源码分析服务用于计算本地源码路径")
 
 
 class IndexProjectTool(BaseTool):
@@ -262,32 +520,55 @@ class IndexProjectTool(BaseTool):
     
     api_tools: AnalyzerAPITools = Field(default=None, exclude=True)
     
-    def _run(self, repo_path: str) -> str:
-        result = self.api_tools.index_project(repo_path)
+    def _run(self, project_id: str) -> str:
+        project_id = _sanitize_simple_str(project_id)
+        # 添加参数验证：确保project_id不含中文
+        if self._contains_chinese(project_id):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "index_project", 
+                "hint": "project_id参数不能包含中文字符，请检查输入",
+                "received": f"project_id='{project_id}'"
+            }, ensure_ascii=False, indent=2)
+            
+        result = self.api_tools.index_project(project_id)
         import json
         return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class GetIndexStatusTool(BaseTool):
     """获取索引状态工具"""
     name: str = "get_index_status"
     description: str = "查询项目索引状态，确认是否已索引完成。"
+
+    args_schema: Type[BaseModel] = IndexProjectInput
     
     api_tools: AnalyzerAPITools = Field(default=None, exclude=True)
     
-    def _run(self) -> str:
-        result = self.api_tools.get_index_status()
+    def _run(self, project_id: str) -> str:
+        project_id = _sanitize_simple_str(project_id)
+        result = self.api_tools.get_index_status(project_id)
         import json
         return json.dumps(result, ensure_ascii=False, indent=2)
     
-    async def _arun(self) -> str:
-        return self._run()
+    async def _arun(self, project_id: str) -> str:
+        return self._run(project_id)
 
 
 class MapHunksInput(BaseModel):
     """映射变更到符号的输入"""
     changes: str = Field(
-        description="""文件变更列表的 JSON 字符串。每项必须包含:
+        description="""文件变更列表的 JSON 字符串。绝对不能有中文，每项必须包含:
 - path: 文件路径（相对于项目根目录）
 - changeType: 变更类型（ADD/MODIFY/DELETE/RENAME）
 - hunks: 变更行块列表，每个 hunk 包含：
@@ -303,6 +584,7 @@ class MapHunksInput(BaseModel):
   "hunks": [{"oldStart": 10, "oldLines": 5, "newStart": 10, "newLines": 8}]
 }]"""
     )
+    project_id: str = Field(description="项目ID（如 education-service）,后端java源码分析服务用于计算本地源码路径")
 
 
 class MapHunksToSymbolsTool(BaseTool):
@@ -318,17 +600,45 @@ hunks 必须是标准 Git diff 格式：oldStart, oldLines, newStart, newLines�
     
     api_tools: AnalyzerAPITools = Field(default=None, exclude=True)
     
-    def _run(self, changes: str) -> str:
+    def _run(self, changes: str, project_id: str) -> str:
         import json
-        try:
-            changes_list = json.loads(changes)
-        except:
-            # 如果已经是列表，直接使用
-            changes_list = changes
-        
-        # 转换数据格式：将 AI 可能生成的简化格式转换为标准格式
+
+        project_id = _sanitize_simple_str(project_id)
+
+        parsed = _parse_jsonish(changes)
+        if isinstance(parsed, str):
+            error_result = {
+                "error": "参数解析失败",
+                "tool": "map_hunks_to_symbols",
+                "hint": "changes 参数必须是合法 JSON 或 JSON5 数组。禁止 markdown 代码块、禁止中文符号混入 JSON。",
+                "original_input": _sanitize_simple_str(changes)[:500] + "..." if len(_sanitize_simple_str(changes)) > 500 else _sanitize_simple_str(changes),
+                "suggestion": "建议直接把 get_changed_files_detailed 的输出（或其规范化后的子集）作为 changes 输入"
+            }
+            return json.dumps(error_result, ensure_ascii=False, indent=2)
+
+        changes_list = parsed
+
+        # 方案一：参数验证（返回错误JSON而不是抛出异常）
+        if not isinstance(changes_list, list):
+            error_result = {
+                "error": "参数格式错误",
+                "tool": "map_hunks_to_symbols",
+                "hint": f"changes 参数必须是数组，每个元素为变更对象。\n当前收到: {type(changes_list).__name__}",
+                "received_value": str(changes_list)[:500] + "..." if len(str(changes_list)) > 500 else str(changes_list)
+            }
+            return json.dumps(error_result, ensure_ascii=False, indent=2)
+
         normalized_changes = []
-        for change in changes_list:
+        for idx, change in enumerate(changes_list):
+            if not isinstance(change, dict):
+                error_result = {
+                    "error": "变更项格式错误",
+                    "tool": "map_hunks_to_symbols",
+                    "hint": f"变更项[{idx}]必须是 JSON 对象。\n当前收到: {type(change).__name__}",
+                    "received_value": str(change)[:500] + "..." if len(str(change)) > 500 else str(change)
+                }
+                return json.dumps(error_result, ensure_ascii=False, indent=2)
+            
             normalized = {
                 "path": change.get("path", ""),
                 "changeType": change.get("changeType", "MODIFY"),
@@ -370,7 +680,7 @@ hunks 必须是标准 Git diff 格式：oldStart, oldLines, newStart, newLines�
             
             normalized_changes.append(normalized)
         
-        result = self.api_tools.map_hunks_to_symbols(normalized_changes)
+        result = self.api_tools.map_hunks_to_symbols(normalized_changes, project_id)
         return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -380,6 +690,7 @@ class AnalyzeImpactInput(BaseModel):
 格式：{"methods": [{"fqnClass": "完整类名", "methodName": "方法名", "paramTypes": ["参数类型"]}], "classes": ["完整类名"]}
 注意：类名必须使用完整包名（FQN），例如 "com.example.MyClass" 而不是 "MyClass"。
 方法必须包含 fqnClass（完整类名）、methodName（方法名）、paramTypes（参数类型列表）。""")
+    project_id: str = Field(description="项目ID（如 education-service），后端java源码分析服务用于计算本地源码路径")
     depth: int = Field(default=2, description="传播深度，建议 1-5")
     direction: str = Field(default="both", description="传播方向：inbound（向上找调用者）、outbound（向下找影响）、both（双向）")
     include_edges: bool = Field(default=True, description="是否返回调用边信息")
@@ -393,18 +704,110 @@ class AnalyzeImpactTool(BaseTool):
 建议先使用 map_hunks_to_symbols 工具获取受影响的方法和类（会包含完整类名），再将其结果作为 seeds 传入本工具。
 支持向上（找调用者/测试入口）、向下（找被调用/影响范围）、双向传播。"""
     args_schema: Type[BaseModel] = AnalyzeImpactInput
-    
+
     api_tools: AnalyzerAPITools = Field(default=None, exclude=True)
-    
-    def _run(self, seeds: str, depth: int = 2, direction: str = "both", include_edges: bool = True) -> str:
+
+    def _run(self, seeds: str, project_id: str, depth: int = 2, direction: str = "both", include_edges: bool = True) -> str:
         import json
+        project_id = _sanitize_simple_str(project_id)
+        seeds_dict = _parse_jsonish(seeds)
+
+        if isinstance(seeds_dict, str):
+            return json.dumps({
+                "error": "参数解析失败",
+                "tool": "analyze_impact",
+                "hint": "seeds 必须是合法 JSON 或 JSON5 对象（包含 methods/classes）。禁止 markdown 代码块、禁止中文符号混入 JSON。",
+                "original_input": _sanitize_simple_str(seeds)[:500] + "..." if len(_sanitize_simple_str(seeds)) > 500 else _sanitize_simple_str(seeds),
+                "suggestion": "建议使用 map_hunks_to_symbols 的输出整理出 seeds 结构后再调用"
+            }, ensure_ascii=False, indent=2)
+
+        # ===== 方案一：参数验证层 =====
+        if isinstance(seeds_dict, dict):
+            self._validate_seeds(seeds_dict)
+        # =============================
+
+        # ===== 方案四：API调用 + 详细错误处理 =====
         try:
-            seeds_dict = json.loads(seeds)
-        except:
-            seeds_dict = seeds
-        
-        result = self.api_tools.analyze_impact(seeds_dict, depth, direction, include_edges)
-        return json.dumps(result, ensure_ascii=False, indent=2)
+            result = self.api_tools.analyze_impact(seeds_dict, project_id, depth, direction, include_edges)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        except Exception as e:
+            # 捕获API错误，返回详细提示
+            error_msg = str(e)
+            if "400" in error_msg:
+                hint = "API返回400错误，可能是参数格式问题。建议检查：\n1. 类名是否包含非法字符（如中文）\n2. JSON格式是否正确\n3. 必要字段是否完整\n4. 可尝试先用map_hunks_to_symbols工具获取正确的seeds格式"
+                return json.dumps({
+                    "error": error_msg,
+                    "hint": hint,
+                    "original_params": f"project_id={project_id}, depth={depth}, direction={direction}"
+                }, ensure_ascii=False, indent=2)
+            else:
+                # 其他类型的错误，直接抛出
+                raise
+
+    def _validate_seeds(self, seeds_dict: dict) -> None:
+        """验证 seeds 参数格式"""
+        errors = []
+
+        # 验证 methods
+        methods = seeds_dict.get("methods", [])
+        if methods:
+            for idx, method in enumerate(methods):
+                if not isinstance(method, dict):
+                    errors.append(f"methods[{idx}] 必须是对象")
+                    continue
+
+                # 验证 fqnClass：必须是合法的Java类名
+                fqn_class = method.get("fqnClass", "")
+                if fqn_class and not self._is_valid_java_class_name(fqn_class):
+                    errors.append(f"methods[{idx}].fqnClass 格式非法: '{fqn_class}'。Java类名只能包含字母、数字、下划线、点号和尖括号（泛型）")
+
+                # 验证 methodName：必须是合法的方法名
+                method_name = method.get("methodName", "")
+                if method_name and not self._is_valid_method_name(method_name):
+                    errors.append(f"methods[{idx}].methodName 格式非法: '{method_name}'。方法名只能包含字母、数字和下划线")
+
+                # 验证 paramTypes：每个参数类型都必须合法
+                param_types = method.get("paramTypes", [])
+                if isinstance(param_types, list):
+                    for pidx, param_type in enumerate(param_types):
+                        if isinstance(param_type, str) and not self._is_valid_java_type(param_type):
+                            errors.append(f"methods[{idx}].paramTypes[{pidx}] 格式非法: '{param_type}'")
+
+        # 验证 classes
+        classes = seeds_dict.get("classes", [])
+        if classes:
+            for idx, cls in enumerate(classes):
+                if not self._is_valid_java_class_name(cls):
+                    errors.append(f"classes[{idx}] 格式非法: '{cls}'")
+
+        # 如果有错误，抛出异常（LangChain会将错误信息返回给LLM）
+        if errors:
+            error_msg = "\n".join(errors)
+            raise ValueError(f"参数验证失败:\n{error_msg}\n\n请重新构建参数，确保：\n1. 类名使用完整包名（如 com.example.MyClass）\n2. 类名和方法名不包含中文字符\n3. paramTypes 是数组格式\n4. 使用 map_hunks_to_symbols 工具获取正确的种子方法")
+
+    def _is_valid_java_class_name(self, name: str) -> bool:
+        """验证Java类名格式"""
+        if not name or not isinstance(name, str):
+            return False
+        # Java类名只能包含：字母、数字、下划线、点号、尖括号（泛型）
+        pattern = r'^[a-zA-Z0-9_<>,.]+$'
+        return re.match(pattern, name) is not None
+
+    def _is_valid_method_name(self, name: str) -> bool:
+        """验证方法名格式"""
+        if not name or not isinstance(name, str):
+            return False
+        # 方法名只能包含：字母、数字、下划线
+        pattern = r'^[a-zA-Z0-9_]+$'
+        return re.match(pattern, name) is not None
+
+    def _is_valid_java_type(self, type_str: str) -> bool:
+        """验证Java类型格式（支持泛型）"""
+        if not type_str or not isinstance(type_str, str):
+            return False
+        # Java类型可以包含：字母、数字、下划线、点号、尖括号、逗号、问号（通配符）
+        pattern = r'^[a-zA-Z0-9_<?>,.]+$'
+        return re.match(pattern, type_str) is not None
 
 
 # ============================================
@@ -413,7 +816,7 @@ class AnalyzeImpactTool(BaseTool):
 
 class ReadFileInput(BaseModel):
     """读取文件的输入"""
-    relative_path: str = Field(description="相对于项目根的文件路径")
+    relative_path: str = Field(description="相对于项目根的文件路径,绝对不要有中文")
     max_lines: int = Field(default=500, description="每次读取的最大行数，默认 500 行")
     offset: int = Field(default=0, description="起始行号（从 0 开始），用于分段读取大文件")
 
@@ -454,8 +857,28 @@ class ReadFileTool(BaseTool):
     source_tools: SourceCodeTools = Field(default=None, exclude=True)
     
     def _run(self, relative_path: str, max_lines: int = 500, offset: int = 0) -> str:
+        relative_path = _sanitize_simple_str(relative_path)
+        # 添加参数验证：确保文件路径不含中文
+        if self._contains_chinese(relative_path):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "read_file", 
+                "hint": "文件路径参数不能包含中文字符，请检查输入",
+                "received": f"relative_path='{relative_path}'"
+            }, ensure_ascii=False, indent=2)
+            
         result = self.source_tools.read_file(relative_path, max_lines, offset)
         return result
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class SearchInFileInput(BaseModel):
@@ -487,9 +910,30 @@ class SearchInFileTool(BaseTool):
     source_tools: SourceCodeTools = Field(default=None, exclude=True)
     
     def _run(self, relative_path: str, keyword: str) -> str:
+        relative_path = _sanitize_simple_str(relative_path)
+        keyword = _sanitize_simple_str(keyword)
+        # 添加参数验证：确保文件路径和关键字不含中文
+        if self._contains_chinese(relative_path) or self._contains_chinese(keyword):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "search_in_file", 
+                "hint": "文件路径和搜索关键字参数不能包含中文字符，请检查输入",
+                "received": f"relative_path='{relative_path}', keyword='{keyword}'"
+            }, ensure_ascii=False, indent=2)
+            
         result = self.source_tools.search_in_file(relative_path, keyword)
         import json
         return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class ListJavaFilesInput(BaseModel):
@@ -506,6 +950,17 @@ class ListJavaFilesTool(BaseTool):
     source_tools: SourceCodeTools = Field(default=None, exclude=True)
     
     def _run(self, directory: str = "") -> str:
+        directory = _sanitize_simple_str(directory)
+        # 添加参数验证：确保目录路径不含中文
+        if self._contains_chinese(directory):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "list_java_files", 
+                "hint": "目录路径参数不能包含中文字符，请检查输入",
+                "received": f"directory='{directory}'"
+            }, ensure_ascii=False, indent=2)
+            
         result = self.source_tools.list_java_files(directory)
         import json
         from collections import defaultdict
@@ -535,6 +990,15 @@ class ListJavaFilesTool(BaseTool):
         }
         
         return json.dumps(output, ensure_ascii=False, indent=2)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class ListDirectoryInput(BaseModel):
@@ -566,9 +1030,28 @@ class ListDirectoryTool(BaseTool):
     source_tools: SourceCodeTools = Field(default=None, exclude=True)
     
     def _run(self, directory: str = "") -> str:
+        # 添加参数验证：确保目录路径不含中文
+        if self._contains_chinese(directory):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "list_directory", 
+                "hint": "目录路径参数不能包含中文字符，请检查输入",
+                "received": f"directory='{directory}'"
+            }, ensure_ascii=False, indent=2)
+            
         result = self.source_tools.list_directory(directory)
         import json
         return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 class FindFileInput(BaseModel):
@@ -603,30 +1086,66 @@ class FindFileTool(BaseTool):
     source_tools: SourceCodeTools = Field(default=None, exclude=True)
     
     def _run(self, pattern: str, max_results: int = 200) -> str:
+        # 添加参数验证：确保查找模式不含中文
+        if self._contains_chinese(pattern):
+            import json
+            return json.dumps({
+                "error": "参数验证失败",
+                "tool": "find_file", 
+                "hint": "文件名模式参数不能包含中文字符，请检查输入",
+                "received": f"pattern='{pattern}'"
+            }, ensure_ascii=False, indent=2)
+            
         result = self.source_tools.find_file(pattern, max_results)
         import json
         return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检查字符串是否包含中文字符"""
+        if not isinstance(text, str):
+            return False
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
 
 # ============================================
 # 工具创建函数
 # ============================================
 
-def create_langchain_tools(
-    repo_path: str,
-    java_analyzer_service_url: str = "http://localhost:8089"
-) -> List[BaseTool]:
+def create_langchain_tools(repo_path: str, java_analyzer_service_url: str, project_id: str = None) -> List[BaseTool]:
     """
     创建所有 LangChain 工具。
     
     Args:
         repo_path: 项目路径
         java_analyzer_service_url: java源码分析服务URL
+        project_id: 项目ID（可选，如果不提供则从repo_path推导）
         
     Returns:
         工具列表
     """
     from .tools import get_all_tools
+    
+    # 如果没有提供 project_id，尝试从 repo_path 推导
+    if project_id is None:
+        try:
+            from django.conf import settings
+            project_mapping = getattr(settings, 'PROJECT_ID_REPO_MAPPING', {})
+            base_dir = getattr(settings, 'JAVA_PROJECTS_BASE_DIR', '/home')
+            
+            for pid in project_mapping.keys():
+                expected_path = os.path.join(base_dir, pid)
+                if repo_path == expected_path or repo_path.startswith(expected_path):
+                    project_id = pid
+                    break
+            else:
+                # 从路径中提取
+                project_id = os.path.basename(repo_path.rstrip('/'))
+        except:
+            import os
+            project_id = os.path.basename(repo_path.rstrip('/'))
     
     tools_instances = get_all_tools(repo_path, java_analyzer_service_url)
     git = tools_instances["git"]
@@ -642,7 +1161,7 @@ def create_langchain_tools(
         GetFileContentByCommitTool(git_tools=git),
         GetCommitsBetweenTool(git_tools=git),
         
-        # API 工具
+        # API 工具（现在会自动使用 project_id）
         IndexProjectTool(api_tools=api),
         GetIndexStatusTool(api_tools=api),
         MapHunksToSymbolsTool(api_tools=api),

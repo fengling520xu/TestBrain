@@ -137,10 +137,11 @@ class KnowledgeConfig(AppConfig):
    ```
 
 5. **启动java源码分析服务**
-   仓库地址:https://github.com/MangoFisher/java-analyzer.git
    ```bash
    mvn spring-boot:run -Dspring-boot.run.profiles=dev
    ```
+  #TODO: 仓库地址待提供
+
 
 6. **访问页面**
    - Web 控制台：http://127.0.0.1:8000/
@@ -183,13 +184,3 @@ class KnowledgeConfig(AppConfig):
 - 测试用例生成：`videos/测试用例生成.mp4`
 - 测试用例评审：`videos/测试用例评审.mp4`
 - 知识库文档上传：`videos/知识库文档上传.mp4`
-
-## ☕️ 支持作者
-
-创作不易，欢迎扫码鼓励：
-
-<img src="videos/赞赏码.jpg" alt="请我喝杯咖啡" title="请我喝杯咖啡" width="320" />
-
----
-
-若在使用中遇到问题或有新需求，欢迎提 Issue 或 PR，一起打造更强大的智能测试平台！

@@ -52,12 +52,5 @@ human_template: |
           }}
         ]
       }}
-    ],
-    "summary": {{
-      "total_test_points": 10,
-      "total_test_scenarios": 25,
-      "high_priority_points": 5,
-      "medium_priority_points": 3,
-      "low_priority_points": 2
-    }}
+    ]
   }}

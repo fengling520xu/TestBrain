@@ -85,7 +85,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     'X-CSRFToken': getCookie('csrftoken') // 获取CSRF令牌
                 },
                 body: JSON.stringify({
-                    target_service: targetService,
+                    project_id: targetService,
                     base_commit: baseCommit,
                     new_commit: newCommit,
                     llm_provider: llmProvider

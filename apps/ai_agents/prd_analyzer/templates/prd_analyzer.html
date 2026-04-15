@@ -21,11 +21,30 @@
         flex-direction: column;
         justify-content: center;
         align-items: center;
+        transition: all 0.3s ease;
+        cursor: pointer;
     }
 
     .upload-area:hover {
         border-color: #007bff;
         background-color: #f1f7ff;
+    }
+
+    .upload-area.dragover {
+        border-color: #007bff;
+        background-color: #e3f2fd;
+        transform: scale(1.02);
+    }
+
+    .upload-area.disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+    }
+
+    .upload-area.disabled:hover {
+        border-color: #ddd;
+        background-color: #f8f9fa;
+        transform: none;
     }
 
     .file-input-button {
@@ -108,9 +127,9 @@
     <h4 class="mb-4">测试点&测试场景解析</h4>
     <form method="post" enctype="multipart/form-data" id="uploadForm" onsubmit="return handleSubmit(event)">
         {% csrf_token %}
-        <div class="upload-area">
+        <div class="upload-area" id="uploadArea">
             <input type="file" name="single_file" id="single_file" style="display: none;" onchange="updateFileName(this)">
-            <button type="button" class="btn btn-primary file-input-button" onclick="document.getElementById('single_file').click()">
+            <button type="button" class="btn btn-primary file-input-button" id="fileInputButton" onclick="document.getElementById('single_file').click()">
                 选择要解析的文件
             </button>
             <div id="selected-file" class="selected-file"></div>
@@ -152,14 +171,147 @@
 </div>
 
 <script>
+// 拖拽功能相关变量
+let isProcessing = false;
+
+// 页面加载完成后初始化拖拽功能
+document.addEventListener('DOMContentLoaded', function() {
+    initializeDragAndDrop();
+});
+
+function initializeDragAndDrop() {
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('single_file');
+
+    // 防止默认拖拽行为
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        uploadArea.addEventListener(eventName, preventDefaults, false);
+        document.body.addEventListener(eventName, preventDefaults, false);
+    });
+
+    // 添加拖拽视觉反馈
+    ['dragenter', 'dragover'].forEach(eventName => {
+        uploadArea.addEventListener(eventName, highlight, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        uploadArea.addEventListener(eventName, unhighlight, false);
+    });
+
+    // 处理文件拖拽
+    uploadArea.addEventListener('drop', handleDrop, false);
+
+    // 点击上传区域也可以触发文件选择（非处理状态时）
+    uploadArea.addEventListener('click', function(e) {
+        if (!isProcessing && e.target.id !== 'fileInputButton') {
+            fileInput.click();
+        }
+    });
+}
+
+function preventDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function highlight(e) {
+    if (!isProcessing) {
+        document.getElementById('uploadArea').classList.add('dragover');
+    }
+}
+
+function unhighlight(e) {
+    document.getElementById('uploadArea').classList.remove('dragover');
+}
+
+function handleDrop(e) {
+    if (isProcessing) return;
+    
+    const dt = e.dataTransfer;
+    const files = dt.files;
+
+    handleFiles(files);
+}
+
+function handleFiles(files) {
+    if (files.length > 0) {
+        const file = files[0];
+        const statusDiv = document.getElementById('uploadStatus');
+        
+        // 检查文件类型
+        if (!file.name.toLowerCase().endsWith('.docx')) {
+            statusDiv.textContent = `只支持 .docx 文件格式，您选择的文件是：${file.name}`;
+            statusDiv.style.color = '#dc3545';
+            
+            // 清除文件输入框和显示
+            const fileInput = document.getElementById('single_file');
+            fileInput.value = '';
+            document.getElementById('selected-file').style.display = 'none';
+            document.getElementById('selected-file').textContent = '';
+            
+            return;
+        }
+
+        // 文件类型正确，清除错误提示
+        statusDiv.textContent = '';
+        
+        // 更新文件输入
+        const fileInput = document.getElementById('single_file');
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        fileInput.files = dataTransfer.files;
+
+        // 更新显示
+        updateFileName(fileInput);
+    }
+}
+
 function updateFileName(input) {
     const selectedFile = document.getElementById('selected-file');
+    const statusDiv = document.getElementById('uploadStatus');
+    
     if (input.files && input.files[0]) {
+        const fileName = input.files[0].name;
+        
+        // 检查文件类型
+        if (!fileName.toLowerCase().endsWith('.docx')) {
+            // 不支持的文件类型
+            selectedFile.style.display = 'none';
+            selectedFile.textContent = '';
+            statusDiv.textContent = `只支持 .docx 文件格式，您选择的文件是：${fileName}`;
+            statusDiv.style.color = '#dc3545';
+            
+            // 清除文件输入
+            input.value = '';
+            return;
+        }
+        
+        // 支持的文件类型
         selectedFile.style.display = 'block';
-        selectedFile.textContent = '已选择文件: ' + input.files[0].name;
+        selectedFile.textContent = '已选择文件: ' + fileName;
+        statusDiv.textContent = '';
     } else {
         selectedFile.style.display = 'none';
         selectedFile.textContent = '';
+    }
+}
+
+function setProcessingState(processing) {
+    isProcessing = processing;
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInputButton = document.getElementById('fileInputButton');
+    const submitBtn = document.getElementById('submitBtn');
+    
+    if (processing) {
+        // 进入处理状态
+        uploadArea.classList.add('disabled');
+        fileInputButton.disabled = true;
+        submitBtn.disabled = true;
+    } else {
+        // 退出处理状态
+        uploadArea.classList.remove('disabled');
+        fileInputButton.disabled = false;
+        submitBtn.disabled = false;
     }
 }
 
@@ -233,7 +385,6 @@ async function handleSubmit(event) {
     
     const form = event.target;
     const fileInput = form.querySelector('input[type="file"]');
-    const submitBtn = document.getElementById('submitBtn');
     const statusDiv = document.getElementById('uploadStatus');
     
     if (!fileInput.files || !fileInput.files[0]) {
@@ -242,7 +393,8 @@ async function handleSubmit(event) {
         return false;
     }
 
-    submitBtn.disabled = true;
+    // 设置处理状态
+    setProcessingState(true);
     statusDiv.textContent = '文件解析中，请稍候...';
     statusDiv.style.color = '#dc3545';
     statusDiv.style.fontWeight = 'bold';
@@ -275,7 +427,8 @@ async function handleSubmit(event) {
         statusDiv.textContent = '文件解析过程中发生错误，请重试';
         statusDiv.style.color = '#dc3545';
     } finally {
-        submitBtn.disabled = false;
+        // 恢复可用状态
+        setProcessingState(false);
     }
 
     return false;

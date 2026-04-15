@@ -367,66 +367,81 @@ class AnalyzerAPITools:
     def __init__(self, base_url: str = "http://localhost:8089"):
         self.base_url = base_url.rstrip("/")
     
-    def index_project(self, repo_path: str) -> Dict[str, Any]:
+    def index_project(self, project_id: str) -> Dict[str, Any]:
         """
         索引项目，构建调用图。
         
         Args:
-            repo_path: 项目根路径
+            project_id: 需要分析的目标java项目ID, 后端源码分析服务根据项目ID查找本地源码路径
             
         Returns:
             索引状态
         """
         try:
-            url = f"{self.base_url}/index/project"
+            url = f"{self.base_url}/index/project?projectId={project_id}"
             payload = {
-                "rootPath": repo_path,
                 "sourceSets": ["main"],
                 "maven": {"resolveDeps": True},
                 "jdkHome": None
             }
             print(f"\n🌐 API 调用: POST {url}")
+            print(f"📦 项目ID: {project_id}")
             print(f"📦 请求体: {payload}")
+            print(f"🔍 完整URL: {url}")
+            print(f"📊 请求详情: projectId={project_id}, sourceSets=main, maven.resolveDeps=True")
             
             response = requests.post(url, json=payload, timeout=120)
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            print(f"✅ 响应成功: {result}")
+            return result
         except Exception as e:
+            print(f"❌ 调用失败: {str(e)}")
             return {"error": str(e)}
     
-    def get_index_status(self) -> Dict[str, Any]:
+    def get_index_status(self, project_id: str) -> Dict[str, Any]:
         """
         获取索引状态。
         
+        Args:
+            project_id: 项目ID, 后端源码分析服务根据项目ID查找本地源码路径
+
         Returns:
             索引状态信息
         """
         try:
-            url = f"{self.base_url}/index/status"
+            url = f"{self.base_url}/index/status?projectId={project_id}"
             print(f"\n🌐 API 调用: GET {url}")
+            print(f"🔍 完整URL: {url}")
+            print(f"📊 请求详情: 获取索引状态 projectId={project_id}")
             
             response = requests.get(url, timeout=10)
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            print(f"✅ 响应成功: {result}")
+            return result
         except Exception as e:
+            print(f"❌ 调用失败: {str(e)}")
             return {"error": str(e)}
     
-    def map_hunks_to_symbols(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def map_hunks_to_symbols(self, changes: List[Dict[str, Any]], project_id: str) -> Dict[str, Any]:
         """
         将文件变更映射到受影响的方法和类。
         
         Args:
-            changes: 变更列表（FileChange 格式）
+            changes: 变更列表（FileChange 格式）    
+            project_id: 项目ID, 后端源码分析服务根据项目ID查找本地源码路径
             
         Returns:
             映射结果，包含 affected 方法和类
         """
         try:
-            url = f"{self.base_url}/map/hunks-to-symbols"
+            url = f"{self.base_url}/map/hunks-to-symbols?projectId={project_id}"
             payload = {"changes": changes}
             
             # 详细输出文件列表
             print(f"\n📋 筛选后的变更文件列表 ({len(changes)} 个):")
+            print(f"🏷️  项目ID: {project_id}")
             for i, change in enumerate(changes, 1):
                 # 兼容两种格式：path/changeType（标准格式）和 b_path/a_path/change_type（内部格式）
                 path = change.get('path') or change.get('b_path') or change.get('a_path') or 'unknown'
@@ -449,16 +464,22 @@ class AnalyzerAPITools:
             
             print(f"\n🌐 API 调用: POST {url}")
             print(f"📦 请求体: {len(changes)} 个文件变更")
+            print(f"🔍 完整URL: {url}")
+            print(f"📊 请求详情: projectId={project_id}, changes={len(changes)} items")
             
             response = requests.post(url, json=payload, timeout=120)
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            print(f"✅ 响应成功: {result}")
+            return result
         except Exception as e:
+            print(f"❌ 调用失败: {str(e)}")
             return {"error": str(e)}
     
     def analyze_impact(
         self,
         seeds: Dict[str, Any],
+        project_id: str,
         depth: int = 1,
         direction: str = "outbound",
         include_edges: bool = True
@@ -468,6 +489,7 @@ class AnalyzerAPITools:
         
         Args:
             seeds: 种子方法/类
+            project_id: 项目ID, 后端源码分析服务根据项目ID查找本地源码路径
             depth: 传播深度
             direction: 方向（inbound/outbound/both）
             include_edges: 是否包含调用边
@@ -476,7 +498,7 @@ class AnalyzerAPITools:
             影响分析结果
         """
         try:
-            url = f"{self.base_url}/analyze/impact"
+            url = f"{self.base_url}/analyze/impact?projectId={project_id}"
             payload = {
                 "seeds": seeds,
                 "direction": direction,
@@ -484,12 +506,18 @@ class AnalyzerAPITools:
                 "includeEdges": include_edges
             }
             print(f"\n🌐 API 调用: POST {url}")
+            print(f"🏷️  项目ID: {project_id}")
             print(f"📦 请求体: seeds={seeds}, depth={depth}, direction={direction}")
+            print(f"🔍 完整URL: {url}")
+            print(f"📊 请求详情: projectId={project_id}, seeds={len(seeds) if isinstance(seeds, list) else 1} items, depth={depth}, direction={direction}")
             
             response = requests.post(url, json=payload, timeout=120)
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            print(f"✅ 响应成功: {result}")
+            return result
         except Exception as e:
+            print(f"❌ 调用失败: {str(e)}")
             return {"error": str(e)}
 
 
@@ -675,7 +703,7 @@ class SourceCodeTools:
             return {"error": f"搜索失败: {str(e)}"}
 
 
-def get_all_tools(repo_path: str, java_analyzer_service_url: str = "http://localhost:8089") -> Dict[str, Any]:
+def get_all_tools(repo_path: str, java_analyzer_service_url: str) -> Dict[str, Any]:
     """
     获取所有工具实例。
     

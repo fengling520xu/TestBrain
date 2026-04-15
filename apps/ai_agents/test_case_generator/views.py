@@ -67,7 +67,9 @@ async def generate(request):
     try:
         # 使用工厂创建选定的LLM服务
         logger.info(f"使用 {llm_provider} 生成测试用例")
-        llm_service = LLMServiceFactory.create(llm_provider, **PROVIDERS.get(llm_provider, {}))
+        # llm_service = LLMServiceFactory.create(llm_provider, **PROVIDERS.get(llm_provider, {}))
+        llm_service = LLMServiceFactory.create(llm_provider)
+
         
         
         generator_agent = TestCaseGeneratorAgent(llm_service=llm_service, knowledge_service=knowledge_service, case_design_methods=case_design_methods, case_categories=case_categories, case_count=case_count)

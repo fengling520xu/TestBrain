@@ -6,6 +6,10 @@ import os
 import sys
 from pathlib import Path
 
+
+# 配置 Hugging Face 国内镜像，用于 SentenceTransformer 模型下载
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 # 采用北京时间
 TIME_ZONE = 'Asia/Shanghai'
 USE_TZ = False
@@ -24,11 +28,7 @@ SECRET_KEY = 'django-insecure-your-secret-key-here'
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    'localhost',
-    '127.0.0.1',
-    '0.0.0.0',
-    '172.16.32.88',
-    '172.16.56.57',
+    '*'
 ]
 
 # 是否启用Milvus
@@ -98,9 +98,17 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'test_brain_db',
-        'USER': 'root',
-        'PASSWORD': 'test123456',
-        'HOST': 'localhost',
+        #----本地开发环境数据库配置----
+        # 'USER': 'root',
+        # 'PASSWORD': 'test123456',
+        # 'HOST': 'localhost',
+        #----本地开发环境数据库配置----
+
+        #----bj-uat环境数据库配置----
+        'USER': '',
+        'PASSWORD': '',
+        'HOST': '',
+        #----bj-uat环境数据库配置----
         'PORT': '3306',
     }
 }
@@ -139,19 +147,23 @@ LLM_PROVIDERS = {
     'default_provider': 'deepseek',
     'deepseek': {
         'name': 'DeepSeek',
-        'model': 'deepseek-chat', #可以切换, deepseek-reasoner即【深度思考】模式, 可能会稍微慢一些
-        # 'model': 'deepseek-reasoner',
-        'api_base': 'https://api.deepseek.com/v1',
-        'temperature': 1.0,
-        'max_tokens': 8192,  #deepseek-chat的max_tokens为8192
-        # 'max_tokens': 64000, #deepseek-reasoner的max_tokens为64000
+        # 'model': 'deepseek-chat', #可以切换, deepseek-reasoner即【深度思考】模式, 可能会稍微慢一些
+        # 'api_base': 'https://api.deepseek.com/v1', #deepseek官网base_url
+
+        # ----使用AI团队部署在阿里云上的deepseek相关配置信息----
+        'model': 'deepseek-v3.1',
+        'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1', #AI团队使用的阿里云base_url
+        # ----使用AI团队部署在阿里云上的deepseek相关配置信息----
+        
+        'temperature': 0.7,
+        'max_tokens': 128000,
     },
     'qwen': {
         'name': '通义千问',
-        'model': 'qwen-max',
-        'api_base': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-        'temperature': 1.0,
-        'max_tokens': 8192,
+        'model': 'qwen3-max-2025-09-23',
+        'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        'temperature': 0.7,
+        'max_tokens': 65000,  # 修正为不超过65536的值
     },
 }
 # AI Agent LLM提供商配置, 每个AI Agent可定制LLM提供商
@@ -165,28 +177,47 @@ AGENT_LLM_DEFAULTS = {
 
 # 向量数据库配置
 VECTOR_DB_CONFIG = {
-    'host': 'localhost',
+    'host': '172.16.50.57', # 
     'port': '19530',
+    'db_name': 'qa_knowledge',
     'collection_name': 'vv_knowledge_collection',
 }
 
-# 嵌入模型配置
-EMBEDDING_CONFIG = {
-    'model': 'bge-m3',
-    'api_key': 'your_huggingface_api_key',
-    'api_url': 'https://api-inference.huggingface.co/models/BAAI/bge-m3',
+# java源码分析服务调用地址
+# JAVA_ANALYZER_SERVICE_URL = "http://localhost:8089" #调用本地服务
+JAVA_ANALYZER_SERVICE_URL = "http://java-analyzer:80" #bj-uat服务间调用
+# JAVA_ANALYZER_SERVICE_URL = "http://172.20.214.59:8089" #本地开发调用bj-uat服务,服务每次部署ip会变
+
+# Java 项目配置
+JAVA_PROJECTS_BASE_DIR = "../"  # Java 项目基础目录
+PROJECT_ID_REPO_MAPPING = {
+    
+    # 可以继续添加更多项目
 }
 
-# java源码分析服务调用地址
-JAVA_ANALYZER_SERVICE_URL = "http://localhost:8089"
-REPO_PATH_MAPPING = {
-    'vv-education-service': '/Users/zhangxiaoguo/Documents/vv-education-service',
-    'java-callgraph2': '/Users/zhangxiaoguo/Documents/java-callgraph2',
+# Git 凭据配置（用于内部GitLab）
+GIT_CREDENTIALS = {
+    'username': '',  # 替换为实际用户名
+    'password': '',  # 替换为实际密码或访问令牌
+    # 或者使用访问令牌（推荐）
+    # 'token': 'your_gitlab_access_token',
 }
 
 # Hugging Face 的tokenizers库使用了多进程机制;
 # 在自己的逻辑中使用时，需要注意在进程fork之前不要使用tokenizers库,否则可能会引起死锁
 # 在Django启动时设置环境变量为false,禁止tokenizers库使用多进程
 os.environ["TOKENIZERS_PARALLELISM"] = "false" 
+
+
+# 向量模型提供商配置: "local"(本地BGE-M3) | "aliyun"(阿里云text-embedding-v4)
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "aliyun")
+
+# 阿里云向量模型配置
+ALIYUN_EMBEDDING_CONFIG = {
+    'api_key': os.getenv('QWEN_API_KEY', ''),
+    'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings',
+    'model': 'text-embedding-v4',
+    'batch_size': 10,  # 阿里云限制最大10条  # 阿里云限制每次最多25条
+}
 
 

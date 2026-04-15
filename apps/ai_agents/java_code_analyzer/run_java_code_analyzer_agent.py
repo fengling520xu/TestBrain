@@ -4,7 +4,7 @@
 
 使用方式:
     python agent/java_code_analyzer_agent.py <repo_path> <base_commit> <new_commit>如:
-    python java_code_analyzer/run_java_code_analyzer_agent.py /Users/zhangxiaoguo/Documents/vv-education-service 95291763 4cbb6ab4 --model deepseek-chat
+    python java_code_analyzer/run_java_code_analyzer_agent.py /Users/zhangxiaoguo/Documents/education-service 95291763 4cbb6ab4 --model deepseek-chat
 """
 
 import sys
@@ -31,7 +31,7 @@ def main():
     parser.add_argument("repo_path", nargs='?', help="Java 项目路径", default="/Users/zhangxiaoguo/Documents/java-callgraph2")
     parser.add_argument("base_commit", nargs='?', help="基准 commit 哈希", default="75f4c93a")
     parser.add_argument("new_commit", nargs='?', help="新 commit 哈希", default="20b84145")
-    parser.add_argument("--java_analyzer_service_url", help="java源码分析 API 地址", default="http://localhost:8089")
+    parser.add_argument("--java_analyzer_service_url", help="java源码分析 API 地址")
     parser.add_argument("--max-iterations", type=int, help="最大迭代次数", default=300)
     parser.add_argument("--model", help="模型名称（覆盖环境变量）")
     parser.add_argument("--output", "-o", help="输出文件路径")

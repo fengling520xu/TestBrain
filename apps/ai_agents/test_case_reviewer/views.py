@@ -26,7 +26,7 @@ DEFAULT_LLM_CONFIG = PROVIDERS.get(DEFAULT_PROVIDER, {})
 # 创建LLM服务实例
 llm_service = LLMServiceFactory.create(
     provider=DEFAULT_PROVIDER,
-    **DEFAULT_LLM_CONFIG
+    # **DEFAULT_LLM_CONFIG
 )
 
 knowledge_service = get_knowledgeService_instance()
