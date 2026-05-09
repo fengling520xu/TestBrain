@@ -8,14 +8,14 @@ TestBrain 通过 Django + LangChain + 多模型接入的方式，提供以下核
 
 - **多 Agent 协同**：针对不同测试场景提供专用智能体（测试用例生成、评审、PRD 分析、接口用例生成、Java 代码分析等）。
 - **多 LLM 供应商**：支持 DeepSeek、Qwen 等模型，并可按 Agent 维度配置默认模型/参数，前端也可手动切换。
-- **知识库加持**：集成 Milvus 向量数据库与 BGEM3 Embedding，支持文档解析、入库、向量检索与上下文增强。
+- **知识库加持**：集成 Milvus 向量数据库与 BGEM3 Embedding和阿里云嵌入模型，支持文档解析、入库、向量检索与上下文增强。
 - **可扩展架构**：模块化的 LLM 工厂、Agent 封装、知识库服务，便于新增模型、Agent 或自定义流程。
 
 ## 🛠️ 功能模块
 
 | 模块 | 功能 | 关键实现 |
 | --- | --- | --- |
-| **AI Agents** | - `test_case_generator`：根据需求生成用例（支持同步/异步调用 LLM）<br>- `test_case_reviewer`：对生成的用例进行评审与打分<br>- `prd_analyzer`：解析 PRD，提炼测试点/场景（内置 JSON 修复兜底）<br>- `iface_case_generator`：基于接口描述生成测试用例<br>- `java_code_analyzer`：分析 Java 代码并梳理潜在测试点 | `apps/ai_agents/*`，配合统一的 Prompt 管理与服务调用 |
+| **AI Agents** | - `test_case_generator`：根据需求生成用例（支持同步/异步调用 LLM）<br>- `test_case_reviewer`：对生成的用例进行评审与打分<br>- `prd_analyzer`：解析 PRD，提炼测试点/场景（内置 JSON 修复兜底）<br>- `iface_case_generator`：基于接口描述生成测试用例<br>- `java_code_analyzer`：分析 Java 代码并梳理潜在测试点,依赖自封装java源码分析服务https://github.com/MangoFisher/java-analyzer | `apps/ai_agents/*`，配合统一的 Prompt 管理与服务调用 |
 | **LLM 集成** | - `LLMServiceFactory` 动态创建模型客户端<br>- `get_agent_llm_configs()` 返回 Agent 默认模型与 Provider 列表<br>- 支持同步 `invoke` 与异步 `ainvoke` | `apps/llm/base.py` / `apps/llm/utils.py` |
 | **知识库** | - `KnowledgeConfig.ready()` 预热 Milvus + BGEM3 单例<br>- `KnowledgeService` 封装向量入库、检索、相似度匹配<br>- 支持多格式文档解析、批量嵌入与检索 | `apps/knowledge/*` |
 | **核心应用** | - Web 页面与 API（Django View）<br>- 用例管理（`TestCase` 模型）<br>- 配置管理、日志、权限预留 | `apps/core/*` |
